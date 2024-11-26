@@ -1,121 +1,121 @@
-includelib kernel32.lib   ; подключаем библиотеку kernel32.lib
- 
-extrn GetStdHandle: proc
-extrn ReadFile: proc
-extrn WriteFile: proc
+.386
+.MODEL FLAT, STDCALL
+OPTION CASEMAP: NONE
 
-.data
-buffer byte 200 dup (?)        ; буфер для считывания данных
-len = $ - buffer               ; длина буфера
-result_buf byte 400 dup (?)    ; буфер для палиндрома (длина удвоенная)
-lens dq 0                      ; длина считанной строки
+includelib kernel32.lib
 
-.code
+EXTERN  GetStdHandle@4: PROC
+EXTERN  WriteConsoleA@20: PROC
+EXTERN  ReadConsoleA@20: PROC
+EXTERN  ExitProcess@4: PROC
+EXTERN  lstrlenA@4: PROC
 
-read proc
-    sub rsp, 56   ; 32 (shadow storage) + 8 (5-й параметр ReadFile) + 8 (bytesRead) + 8 (выравнивание)
-    mov r8, rcx   ; Третий параметр ReadFile - размер буфера
-    mov rcx, rax  ; Первый параметр ReadFile - дескриптор файла
-    mov rdx, rdi  ; Второй параметр ReadFile - адрес буфера
-    lea r9, bytesRead   ; Четвертый параметр ReadFile - количество считанных байтов
-    mov qword ptr [rsp + 32], 0      ; Пятый параметр ReadFile - 0
-    call ReadFile       ; вызов функции ReadFile
-    test rax, rax       ; проверяем на ошибку
-    mov eax, bytesRead  ; если ошибки нет, в RAX количество считанных байтов
-    jnz exit            ; если в RAX ненулевое значение
-    mov rax, -1         ; помещаем условный код ошибки
-exit:
-    add rsp, 56
-    ret
-bytesRead equ [rsp+40] ; область в стеке для хранения количества считанных байтов
-read endp
+.DATA
+STRN DB "Enter string: ", 13, 10, 0  ; Строка для вывода приглашения
+PALINDROM DB "Palindrome: ", 13, 10, 0 ; Текст перед выводом палиндрома
+BUF  DB 200 DUP (?)                  ; Буфер для ввода строки (200 байтов)
+RESULT_BUF DB 400 DUP (?)            ; Буфер для результата (палиндром)
+LENS DD ?                            ; Количество выведенных символов
+DIN  DD ?                            ; Дескриптор ввода
+DOUT DD ?                            ; Дескриптор вывода
 
-readFromConsole proc
-    sub rsp, 32
-    push rcx            ; сохраняем количество символов
-    mov  rcx, -10       ; Аргумент для GetStdHandle - STD_INPUT
-    call GetStdHandle   ; вызываем функцию GetStdHandle
-    pop rcx
-    call read
-    add rsp, 32
-    ret
-readFromConsole endp
+.CODE
+MAIN PROC
+    ; Получаем дескриптор ввода
+    PUSH -10
+    CALL GetStdHandle@4
+    MOV DIN, EAX
 
-genPalindrome proc
-    ; Устанавливаем направление обработки цепочек (DF = 0, копирование вперед)
-    CLD                         ; Устанавливаем направление: вперед
+    ; Получаем дескриптор вывода
+    PUSH -11
+    CALL GetStdHandle@4
+    MOV DOUT, EAX
 
-    ; Копируем строку в начало результирующего буфера
-    lea rsi, buffer             ; Адрес исходной строки
-    lea rdi, result_buf         ; Адрес результирующего буфера
-    mov rcx, qword ptr [lens]   ; Количество символов в строке
-    rep movsb                   ; Копируем строку в результат
+    ; Вывод строки приглашения "Enter string:"
+    PUSH 0
+    PUSH OFFSET LENS
+    PUSH OFFSET STRN
+    CALL lstrlenA@4     ; Вычисляем длину строки STRN
+    PUSH EAX            ; Длина строки
+    PUSH OFFSET STRN    ; Адрес строки
+    PUSH DOUT           ; Дескриптор вывода
+    CALL WriteConsoleA@20
 
-    ; Устанавливаем направление обработки цепочек в обратную сторону (DF = 1)
-    STD                         ; Устанавливаем направление: назад
+    ; Читаем строку, введённую пользователем
+    PUSH 0
+    PUSH OFFSET LENS
+    PUSH 200            ; Максимальная длина строки
+    PUSH OFFSET BUF     ; Буфер для ввода
+    PUSH DIN            ; Дескриптор ввода
+    CALL ReadConsoleA@20
 
-    ; Копируем строку с конца во вторую половину результирующего буфера
-    lea rsi, buffer             ; Адрес исходной строки
-    add rsi, qword ptr [lens]   ; Указатель на конец строки (переход к последнему символу)
-    dec rsi                     ; Переход к последнему символу
-    lea rdi, result_buf         ; Адрес результирующего буфера
-    add rdi, qword ptr [lens]   ; Переход к концу первой части в результирующем буфере
-    mov rcx, qword ptr [lens]   ; Количество символов в строке
-    rep movsb                   ; Копируем строку в обратном порядке
+    ; Убираем символы возврата каретки (\r) и новой строки (\n)
+    MOV EDI, OFFSET BUF      ; Указатель на строку
+    MOV ECX, LENS            ; Количество считанных байтов
+    DEC ECX                  ; Уменьшаем ECX на 1 (\n)
+    MOV BYTE PTR [EDI + ECX], 0 ; Заменяем \n на конец строки
+    DEC ECX                  ; Уменьшаем ECX на 1 (\r)
+    MOV LENS, ECX            ; Обновляем LENS
 
-    ; Завершаем результирующую строку
-    cld                         ; Возвращаем направление: вперед
-    lea rdi, result_buf         ; Указатель на результирующий буфер
-    add rdi, qword ptr [lens]   ; Переход к концу первой части строки
-    add rdi, qword ptr [lens]   ; Переход к концу второй части строки
-    mov byte ptr [rdi], 0       ; Завершаем строку символом NULL
+    ; Формируем палиндром
+    CALL FormPalindrome
 
-    ret
-genPalindrome endp
+    ; Вывод текста "Palindrome: "
+    PUSH 0
+    PUSH OFFSET LENS
+    PUSH OFFSET PALINDROM
+    CALL lstrlenA@4
+    PUSH EAX
+    PUSH OFFSET PALINDROM
+    PUSH DOUT
+    CALL WriteConsoleA@20
 
-write proc
-    sub  rsp, 56
-    mov rdx, rsi          ; Второй параметр - строка
-    mov r8, rcx           ; Третий параметр - длина строки
-    mov  rcx, rax         ; Первый параметр WriteFile - в регистр RCX помещаем дескриптор файла - консольного вывода
-    lea  r9, bytesWritten ; Четвертый параметр WriteFile - адрес для получения записанных байтов
-    mov qword ptr [rsp + 32], 0  ; Пятый параметр WriteFile
-    call WriteFile
-     
-    test rax, rax ; проверяем на наличие ошибки
-    mov eax, bytesWritten ; если все нормально, помещаем в RAX количество записанных байтов
-    jnz exit 
-    mov rax, -1 ; Возвращаем через RAX код ошибки
-exit:
-    add  rsp, 56
-    ret
-bytesWritten equ [rsp+40]
-write endp
+    ; Вывод сформированного палиндрома
+    PUSH 0
+    PUSH OFFSET LENS
+    PUSH OFFSET RESULT_BUF
+    CALL lstrlenA@4
+    PUSH EAX
+    PUSH OFFSET RESULT_BUF
+    PUSH DOUT
+    CALL WriteConsoleA@20
 
-writeToConsole proc
-    sub rsp, 32
-    push rcx            ; сохраняем количество символов
-    mov rcx, -11        ; Аргумент для GetStdHandle - STD_OUTPUT
-    call GetStdHandle   ; вызываем функцию GetStdHandle
-    pop rcx             ; восстанавливаем RCX - количество символов
-    call write
-    add rsp, 32
-    ret
-writeToConsole endp
- 
-start proc
-    lea rdi, buffer       ; буфер для считывания данных
-    mov rcx, len          ; размер буфера
-    call readFromConsole  ; считываем данные с консоли
+    ; Выход из программы
+    PUSH 0              ; Код выхода
+    CALL ExitProcess@4
+MAIN ENDP
 
-    mov qword ptr [lens], rax ; Сохраняем длину строки
+FormPalindrome PROC
+    CLD
+    ; Указатели на входной и выходной буфер
+    LEA ESI, BUF        ; Начало исходной строки
+    LEA EDI, RESULT_BUF ; Начало буфера результата
 
-    call genPalindrome    ; Формируем палиндром
+    ; Копируем исходную строку в результат
+    MOV ECX, LENS
+    REP MOVSB
 
-    lea rsi, result_buf   ; Выводим палиндром
-    mov rcx, rax          ; Длина результирующей строки
-    call writeToConsole
+    ; Указатели на начало и конец строки
+    LEA ESI, BUF            ; Указатель на начало строки (BUF)
+    LEA EDI, RESULT_BUF     ; Указатель на начало буфера результата (RESULT_BUF)
+    MOV ECX, LENS           ; Количество символов в строке
 
-    ret
-start endp
-end
+    ; Устанавливаем указатель ESI на конец строки
+    ADD ESI, ECX
+    DEC ESI                 ; Переходим к последнему символу
+
+    ADD EDI, ECX
+    ; DEC EDI ; Раскоментировать, если вместо qweewq, нужно qwewq
+
+REVERSE_LOOP:
+    MOV AL, BYTE PTR [ESI]  ; Загружаем символ из конца строки
+    MOV BYTE PTR [EDI], AL  ; Записываем его в результат
+    DEC ESI                 ; Смещаемся к предыдущему символу в BUF
+    INC EDI                 ; Смещаемся к следующей позиции в RESULT_BUF
+    LOOP REVERSE_LOOP       ; Уменьшаем ECX, пока не достигнем 0
+    
+    MOV BYTE PTR [EDI], 0   ; Завершающий символ строки
+    RET
+FormPalindrome ENDP
+
+END MAIN
